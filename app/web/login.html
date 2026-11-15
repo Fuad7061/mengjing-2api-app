@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>登录 · AI梦境画画师 2API</title>
+<title>Sign in · mengjing-2api</title>
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -11,13 +11,13 @@
   <div class="card">
     <div class="brand" style="margin-bottom: 18px">
       <div class="logo">🎨</div>
-      <div>AI梦境画画师 2API<div class="sub">管理控制台</div></div>
+      <div>mengjing-2api<div class="sub">Admin Console</div></div>
     </div>
-    <label for="pw">管理员密码</label>
-    <input type="password" id="pw" placeholder="请输入密码" autofocus>
+    <label for="pw">Admin password</label>
+    <input type="password" id="pw" placeholder="Enter password" autofocus>
     <div id="msg" class="muted mt" style="font-size: 13px"></div>
-    <button class="mt" style="width: 100%" id="btn">登录</button>
-    <div class="muted mt center" style="font-size: 12px">默认密码 <code>admin123</code>，登录后请尽快修改</div>
+    <button class="mt" style="width: 100%" id="btn">Sign in</button>
+    <div class="muted mt center" style="font-size: 12px">Default password <code>admin123</code> — change it right after signing in</div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -35,9 +35,9 @@ async function login() {
     });
     const j = await r.json();
     if (r.ok) { location.href = '/'; return; }
-    $('#msg').textContent = j.error || '登录失败';
-    toast(j.error || '登录失败', 'err');
-  } catch (e) { toast('网络错误', 'err'); }
+    $('#msg').textContent = j.error || 'Sign-in failed';
+    toast(j.error || 'Sign-in failed', 'err');
+  } catch (e) { toast('Network error', 'err'); }
   finally { $('#btn').disabled = false; }
 }
 $('#btn').onclick = login;

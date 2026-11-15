@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>API 文档 · AI梦境画画师 2API</title>
+<title>API Docs · mengjing-2api</title>
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -11,115 +11,124 @@
   <header class="top">
     <div class="brand">
       <div class="logo">🎨</div>
-      <div>AI梦境画画师 2API<div class="sub">OpenAI 兼容接口文档</div></div>
+      <div>mengjing-2api<div class="sub">OpenAI-compatible API</div></div>
     </div>
     <div class="row">
-      <a href="/" class="badge">控制台</a>
+      <a href="/" class="badge">Console</a>
     </div>
   </header>
 
   <div class="card">
-    <h2>概览</h2>
-    <p>本服务把「AI梦境画画师」App 的文生图能力封装为 OpenAI 兼容的 HTTP 接口，底层调用阿里云百炼 <code>qwen_image3</code> 模型。所有请求默认需要携带 API 密钥。</p>
+    <h2>Overview</h2>
+    <p>This service wraps the text-to-image capability of the "AI梦境画画师" app as an OpenAI-compatible HTTP API, backed by Alibaba DashScope <code>qwen_image3</code>. Requests require an API key by default.</p>
     <table>
-      <thead><tr><th>项目</th><th>值</th></tr></thead>
+      <thead><tr><th>Item</th><th>Value</th></tr></thead>
       <tbody>
         <tr><td>Base URL</td><td class="mono" id="base">-</td></tr>
-        <tr><td>鉴权方式</td><td><code>Authorization: Bearer &lt;API_KEY&gt;</code> 或 <code>x-api-key</code></td></tr>
-        <tr><td>响应格式</td><td>JSON（UTF-8）</td></tr>
-        <tr><td>单张耗时</td><td>约 50–60 秒</td></tr>
+        <tr><td>Auth</td><td><code>Authorization: Bearer &lt;API_KEY&gt;</code> or <code>x-api-key</code></td></tr>
+        <tr><td>Response format</td><td>JSON (UTF-8)</td></tr>
+        <tr><td>Latency</td><td>~50–60 seconds per image</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="card">
-    <h2>POST /v1/images/generations <span class="hint">文生图</span></h2>
-    <label>请求体</label>
+    <h2>POST /v1/images/generations <span class="hint">text to image</span></h2>
+    <label>Request body</label>
     <pre><code>{
-  "prompt": "一只白色的猫，坐在窗台上，阳光洒落",
-  "size": "1024x1024",   // 可选：1024x1024 | 768x1344 | 1344x768
-  "style": "二次元"       // 可选，默认「二次元」
+  "prompt": "A white cat on a windowsill, sunlight streaming in",
+  "model": "qwen-image3",         // optional
+  "style": "Anime",               // optional, default "Anime"
+  "aspect_ratio": "16:9",         // optional: 1:1 | 9:16 | 16:9
+  "size": "1024x1024",            // optional: 1024x1024 | 1024x1792 | 1792x1024 | 512x512
+  "n": 1,                          // optional: 1-4 images
+  "response_format": "url"        // optional: "url" (default) | "b64_json"
 }</code></pre>
-    <label>响应</label>
+    <p class="muted" style="font-size:12px"><code>aspect_ratio</code> takes precedence over <code>size</code> when both are given. Each requested image consumes one credit and takes ~50–60s, generated sequentially.</p>
+    <label>Response</label>
     <pre><code>{
   "created": 1730000000,
   "data": [ { "url": "https://...aliyuncs.com/....png", "b64_json": null } ],
   "task_id": "ccf73ef5-...",
   "elapsed_s": 58.0,
-  "upstream": "qwen_image3 (dashscope)"
+  "upstream": "qwen_image3 (dashscope)",
+  "model": "qwen-image3",
+  "size": "1024x1024",
+  "aspect_ratio": "1:1",
+  "n": 1
 }</code></pre>
-    <label>cURL 示例</label>
+    <label>cURL example</label>
     <pre><code>curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"星空下的雪山","size":"1344x768"}'</code></pre>
+  -d '{"prompt":"snowy mountains under a starry sky","aspect_ratio":"16:9"}'</code></pre>
   </div>
 
   <div class="card">
-    <h2>其他接口</h2>
+    <h2>Other endpoints</h2>
     <table>
-      <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+      <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td>GET</td><td class="mono">/v1/models</td><td>可用模型列表</td></tr>
-        <tr><td>GET</td><td class="mono">/v1/styles</td><td>支持的画风列表</td></tr>
-        <tr><td>GET</td><td class="mono">/v1/pool</td><td>账号池状态</td></tr>
-        <tr><td>GET</td><td class="mono">/health</td><td>健康检查（无需鉴权）</td></tr>
+        <tr><td>GET</td><td class="mono">/v1/models</td><td>Available models (public)</td></tr>
+        <tr><td>GET</td><td class="mono">/v1/styles</td><td>Supported styles (public)</td></tr>
+        <tr><td>GET</td><td class="mono">/v1/pool</td><td>Account pool status</td></tr>
+        <tr><td>GET</td><td class="mono">/health</td><td>Health check (no auth)</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="card">
-    <h2>尺寸与画风</h2>
+    <h2>Size &amp; style</h2>
     <div class="grid cols">
       <div>
-        <label>尺寸 size</label>
+        <label>size</label>
         <ul>
-          <li><code>1024x1024</code> 正方形</li>
-          <li><code>768x1344</code> 竖版</li>
-          <li><code>1344x768</code> 横版</li>
+          <li><code>1024x1024</code> · square (1:1)</li>
+          <li><code>1024x1792</code> · portrait (9:16)</li>
+          <li><code>1792x1024</code> · landscape (16:9)</li>
         </ul>
       </div>
       <div>
-        <label>画风 style</label>
-        <p class="mono muted" id="styles">加载中…</p>
+        <label>style</label>
+        <p class="mono muted" id="styles">Loading…</p>
       </div>
     </div>
   </div>
 
   <div class="card">
-    <h2>Python 示例</h2>
+    <h2>Python example</h2>
     <pre><code>import requests
 
 r = requests.post(
     "BASE/v1/images/generations",
     headers={"Authorization": "Bearer API_KEY"},
-    json={"prompt": "赛博朋克城市夜景", "size": "1344x768", "style": "赛博朋克"},
+    json={"prompt": "cyberpunk city at night", "aspect_ratio": "16:9", "style": "Cyberpunk"},
     timeout=180,
 )
 print(r.json()["data"][0]["url"])</code></pre>
   </div>
 
   <div class="card">
-    <h2>错误码</h2>
+    <h2>Error codes</h2>
     <table>
-      <thead><tr><th>状态码</th><th>含义</th></tr></thead>
+      <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
       <tbody>
-        <tr><td>400</td><td>参数错误 / 提示词命中敏感词</td></tr>
-        <tr><td>401</td><td>API 密钥无效</td></tr>
-        <tr><td>429</td><td>账号池繁忙，请稍后重试</td></tr>
-        <tr><td>502</td><td>上游服务异常</td></tr>
+        <tr><td>400</td><td>Invalid parameters / prompt hit the content filter</td></tr>
+        <tr><td>401</td><td>Invalid API key</td></tr>
+        <tr><td>429</td><td>Account pool busy, retry later</td></tr>
+        <tr><td>502</td><td>Upstream service error</td></tr>
       </tbody>
     </table>
   </div>
 
-  <p class="muted center" style="font-size:12px;margin:24px 0">仅供学习研究使用，请遵守相关平台的服务条款。</p>
+  <p class="muted center" style="font-size:12px;margin:24px 0">For study and research only. Please respect the platform's terms of service.</p>
 </div>
 <script>
   const base = location.origin;
   document.getElementById('base').textContent = base;
   fetch('/v1/styles').then(r => r.ok ? r.json() : null).then(j => {
     if (j && j.data) document.getElementById('styles').textContent = j.data.join(' / ');
-  }).catch(() => { document.getElementById('styles').textContent = '二次元 / 国风 / 写实 / 插画 …'; });
+  }).catch(() => { document.getElementById('styles').textContent = 'Anime / Chinese / Realistic / Illustration …'; });
 </script>
 </body>
 </html>

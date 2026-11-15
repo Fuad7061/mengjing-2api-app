@@ -1,6 +1,6 @@
-"""上游协议客户端：注册 / 登录 / 敏感词检测 / 提交任务 / 轮询结果。
+"""Upstream protocol client: register / login / text moderation / submit / poll.
 
-全部使用标准库 http.client + ssl，不引入第三方依赖。
+Uses only the standard library (http.client + ssl); no third-party dependencies.
 """
 import http.client
 import json
@@ -11,22 +11,58 @@ import uuid
 PACKAGE = "com.fnm.huahuashi"
 VERSION = "2.0.1"
 
-# 尺寸映射（chicun 参数）
+# Size mapping (upstream `chicun` parameter)
 SIZES = {
     "1024x1024": "1*1",
     "768x1344": "9*16",
     "1344x768": "16*9",
-    # 兼容常见 OpenAI 尺寸别名
+    # Common OpenAI size aliases
     "512x512": "1*1",
     "1024x1792": "9*16",
     "1792x1024": "16*9",
 }
 
-DEFAULT_STYLE = "二次元"
+# Aspect ratios exposed by the API (English-facing)
+RATIOS = {
+    "1:1": "1*1",
+    "9:16": "9*16",
+    "16:9": "16*9",
+    "1*1": "1*1",
+    "9*16": "9*16",
+    "16*9": "16*9",
+}
+
+# English style names exposed to clients.
+DEFAULT_STYLE = "Anime"
 STYLES = [
-    "二次元", "国风", "写实", "插画", "油画", "水彩", "3D", "手绘",
-    "像素", "赛博朋克", "蒸汽波", "扁平", "治愈", "暗黑", "极简",
+    "Anime", "Chinese", "Realistic", "Illustration", "Oil Painting",
+    "Watercolor", "3D", "Hand-drawn", "Pixel", "Cyberpunk", "Vaporwave",
+    "Flat", "Healing", "Dark", "Minimalist",
 ]
+
+# English style name -> upstream Chinese `fengge` value.
+STYLE_MAP = {
+    "anime": "二次元",
+    "chinese": "国风",
+    "guofeng": "国风",
+    "realistic": "写实",
+    "illustration": "插画",
+    "oil painting": "油画",
+    "oil": "油画",
+    "watercolor": "水彩",
+    "3d": "3D",
+    "hand-drawn": "手绘",
+    "handdrawn": "手绘",
+    "hand drawn": "手绘",
+    "pixel": "像素",
+    "cyberpunk": "赛博朋克",
+    "vaporwave": "蒸汽波",
+    "flat": "扁平",
+    "healing": "治愈",
+    "dark": "暗黑",
+    "minimalist": "极简",
+    "minimal": "极简",
+}
 
 _RSA_ACTIONS = ("bdtoken", "aliDmh", "tempUser", "dlUser")
 
@@ -36,14 +72,14 @@ class UpstreamError(RuntimeError):
 
 
 class ContentViolation(UpstreamError):
-    """提示词命中平台敏感词。"""
+    """Prompt triggered the platform's content filter."""
 
 
 class Upstream:
     def __init__(self, config):
         self.config = config
 
-    # ---- 底层 ----
+    # ---- low level ----
     @staticmethod
     def _ctx():
         ctx = ssl.create_default_context()
@@ -92,9 +128,9 @@ class Upstream:
                 jar = kv
         return data, jar
 
-    # ---- 账号 ----
+    # ---- accounts ----
     def register(self):
-        """免验证注册一个临时账号。"""
+        """Register a temporary account without verification."""
         androidid = uuid.uuid4().hex
         imei = uuid.uuid4().hex[:15]
         mac = ":".join("%02x" % (uuid.uuid4().int >> i & 0xFF) for i in range(0, 48, 8))
@@ -110,7 +146,7 @@ class Upstream:
         ]
         j, _ = self.post_form("/yh!tempUser.action", parts)
         if str(j.get("st")) != "1":
-            raise UpstreamError(f"注册失败: {j}")
+            raise UpstreamError(f"registration failed: {j}")
         acct = {
             "id": str(j["id"]),
             "password": str(j.get("mima", "")),
@@ -130,7 +166,7 @@ class Upstream:
         return acct
 
     def relogin(self, acct):
-        """重新登录以刷新 JSESSIONID 会话。"""
+        """Log in again to refresh the JSESSIONID session."""
         parts = [
             ("id", acct["id"]),
             ("mm", acct.get("password", "")),
@@ -148,16 +184,16 @@ class Upstream:
             return True
         return False
 
-    # ---- 生成 ----
+    # ---- generation ----
     def check_text(self, prompt, acct):
         j, _ = self.post_form("/ctext!isweigui.action", [("textinfo", prompt)], acct["cookie"])
         if str(j.get("st")) == "-1":
             if self.relogin(acct):
                 j, _ = self.post_form("/ctext!isweigui.action", [("textinfo", prompt)], acct["cookie"])
         if str(j.get("st")) != "1":
-            raise UpstreamError(f"敏感词检测失败: {j}")
+            raise UpstreamError(f"text moderation failed: {j}")
         if j.get("weigui"):
-            raise ContentViolation("提示词命中平台敏感词，请修改后重试")
+            raise ContentViolation("prompt triggered the platform's content filter, please rephrase")
 
     def submit(self, prompt, chicun, style, acct):
         parts = [("miaoshu", prompt), ("chicun", chicun), ("fengge", style)]
@@ -165,7 +201,7 @@ class Upstream:
         if str(j.get("st")) == "-1" and self.relogin(acct):
             j, _ = self.post_form("/qwenpic!zhizuo.action", parts, acct["cookie"])
         if str(j.get("st")) != "1":
-            raise UpstreamError(f"提交任务失败: {j}")
+            raise UpstreamError(f"task submission failed: {j}")
         return str(j.get("taskid"))
 
     def poll(self, taskid, acct):
@@ -180,11 +216,30 @@ class Upstream:
             return "pending", None
         if st == "-1" and self.relogin(acct):
             return "pending", None
-        raise UpstreamError(f"任务失败: {j}")
+        raise UpstreamError(f"task failed: {j}")
+
+
+def map_style(style: str) -> str:
+    """Map a requested style to the upstream Chinese `fengge` value."""
+    if not style:
+        return STYLE_MAP[DEFAULT_STYLE.lower()]
+    style = str(style).strip()
+    # Pass Chinese values through unchanged.
+    if style in STYLE_MAP.values():
+        return style
+    return STYLE_MAP.get(style.lower(), STYLE_MAP[DEFAULT_STYLE.lower()])
+
+
+def map_ratio(ratio: str):
+    """Map a requested aspect ratio (e.g. "9:16") to the upstream `chicun`."""
+    if not ratio:
+        return SIZES["1024x1024"]
+    ratio = str(ratio).strip().lower().replace(" ", "")
+    return RATIOS.get(ratio, SIZES["1024x1024"])
 
 
 def map_size(size: str):
-    """把请求尺寸映射为上游 chicun 参数。"""
+    """Map a requested size to the upstream `chicun` parameter."""
     if not size:
         return SIZES["1024x1024"]
     size = size.strip().lower().replace(" ", "")

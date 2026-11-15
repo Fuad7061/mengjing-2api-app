@@ -1,3 +1,3 @@
-"""AI梦境画画师 2API 网关 — 应用包。"""
+"""mengjing-2api gateway — application package."""
 
 __version__ = "2.0.0"

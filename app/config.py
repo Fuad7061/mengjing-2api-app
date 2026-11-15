@@ -1,4 +1,4 @@
-"""配置管理：默认值 + 原子化持久化 + 线程安全读写。"""
+"""Configuration: defaults + atomic persistence + thread-safe access."""
 import copy
 import json
 import os
@@ -39,7 +39,7 @@ DEFAULTS = {
     "session_ttl": 86400,
 }
 
-# 允许通过后台修改的字段白名单（键为 config 路径，值为类型转换器）
+# Whitelist of fields editable from the admin console (key = config path, value = type caster)
 EDITABLE = {
     "require_api_key": bool,
     "docs_public": bool,
@@ -76,7 +76,7 @@ class Config:
         self.data = copy.deepcopy(DEFAULTS)
         self.load()
 
-    # ---- 持久化 ----
+    # ---- persistence ----
     def load(self):
         if self.path.exists():
             try:
@@ -101,7 +101,7 @@ class Config:
                 self.data["must_change_password"] = True
                 self.save()
 
-    # ---- 读写 ----
+    # ---- read / write ----
     def get(self, *keys, default=None):
         with self._lock:
             cur = self.data
@@ -123,18 +123,18 @@ class Config:
             data = copy.deepcopy(self.data)
         if redact:
             data.pop("admin_password_hash", None)
-            # 只暴露 key 的前后片段
+            # Only expose the leading/trailing fragments of each key
             for k in data.get("api_keys", []):
                 k["key_masked"] = _mask(k.get("key", ""))
                 k.pop("key", None)
         return data
 
     def apply_settings(self, incoming):
-        """按白名单应用后台提交的设置，返回 (applied, errors)。"""
+        """Apply admin-submitted settings against the whitelist; return (applied, errors)."""
         applied, errors = [], []
         for dotted, caster in EDITABLE.items():
             section, _, leaf = dotted.partition(".")
-            if section == leaf:  # 顶层
+            if section == leaf:  # top level
                 if dotted not in incoming:
                     continue
                 raw = incoming[dotted]

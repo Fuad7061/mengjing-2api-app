@@ -1,4 +1,4 @@
-/* 共享工具：请求封装、Toast 提示 */
+/* Shared helpers: request wrapper, toast notifications */
 window.api = async function (url, opts = {}) {
   const r = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -26,8 +26,8 @@ window.toast = function (msg, kind = '') {
 
 window.copyText = function (text) {
   navigator.clipboard.writeText(text).then(
-    () => toast('已复制到剪贴板', 'ok'),
-    () => toast('复制失败', 'err')
+    () => toast('Copied to clipboard', 'ok'),
+    () => toast('Copy failed', 'err')
   );
 };
 

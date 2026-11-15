@@ -1,12 +1,16 @@
-"""HTTP 服务：路由、鉴权、管理 API、静态页面。
+"""HTTP server: routing, auth, admin API, static pages.
 
-标准库 ThreadingHTTPServer 实现，HTTP/1.1 长连接 + 线程池。
+Built on the standard library ThreadingHTTPServer with HTTP/1.1 keep-alive
+and a thread pool.
 """
+import base64
 import json
 import os
+import ssl
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
@@ -21,11 +25,30 @@ from .security import (
     hash_password,
     verify_password,
 )
-from .upstream import ContentViolation, STYLES, UpstreamError, map_size
+from .upstream import (
+    ContentViolation,
+    DEFAULT_STYLE,
+    STYLES,
+    UpstreamError,
+    map_ratio,
+    map_size,
+    map_style,
+)
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 2 * 1024 * 1024
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8"}
+
+
+def _fetch_b64(url, timeout=60):
+    """Download an image URL and return its base64 encoding."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={"User-Agent": "mengjing-2api"})
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        raw = resp.read()
+    return base64.b64encode(raw).decode("ascii")
 
 
 class Stats:
@@ -75,11 +98,11 @@ class App:
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "mengjing-2api/" + __version__
-    app = None  # 由 run() 注入
+    app = None  # injected by run()
 
-    # ---- 基础设施 ----
+    # ---- infrastructure ----
     def log_message(self, fmt, *args):
-        pass  # 静默，避免高频轮询刷屏
+        pass  # silent to avoid log spam from frequent polling
 
     def log_error(self, fmt, *args):
         sys.stderr.write("[http] %s - %s\n" % (self.address_string(), fmt % args))
@@ -140,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    # ---- 鉴权 ----
+    # ---- auth ----
     def _is_admin(self):
         return self.app.sessions.valid(self._cookies().get(SessionStore.COOKIE))
 
@@ -155,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return api_key_matches(self._presented_key(), self.app.config.get("api_keys", default=[]))
 
-    # ---- 路由 ----
+    # ---- routing ----
     def do_GET(self):
         self._dispatch("GET")
 
@@ -197,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             self.log_error("dispatch error: %r", e)
             return self._json(500, {"error": {"message": "internal error", "type": "server_error"}})
 
-    # ---- 页面 ----
+    # ---- pages ----
     def _pages(self, method, path):
         if method != "GET":
             return self._json(405, {"error": "method not allowed"})
@@ -226,32 +249,57 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(204, b"", "text/plain")
         return self._json(404, {"error": "not found"})
 
-    # ---- OpenAI 兼容 API ----
+    # ---- OpenAI-compatible API ----
     def _v1(self, method, path, query):
         cors = {"Access-Control-Allow-Origin": "*"}
-        if not self._api_ok():
-            return self._json(401, {"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}, cors)
+        # Public discovery endpoints (no API key required).
         if path == "/v1/models" and method == "GET":
             return self._json(200, {"object": "list", "data": [{"id": "qwen-image3", "object": "model", "owned_by": "mengjing-2api"}]}, cors)
         if path == "/v1/styles" and method == "GET":
             return self._json(200, {"object": "list", "data": STYLES}, cors)
+        if not self._api_ok():
+            return self._json(401, {"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}, cors)
         if path == "/v1/pool" and method == "GET":
             return self._json(200, self.app.pool.snapshot(), cors)
         if path == "/v1/images/generations" and method == "POST":
             return self._generate()
         return self._json(404, {"error": {"message": "unknown endpoint", "type": "invalid_request_error"}}, cors)
 
-    def _generate(self):
-        body = self._body()
+    def _do_generate(self, body):
+        """Shared generation logic. Returns a response dict; exceptions bubble up."""
         prompt = (body.get("prompt") or "").strip()
         if not prompt:
-            return self._json(400, {"error": {"message": "prompt is required", "type": "invalid_request_error"}})
-        size = body.get("size") or "1024x1024"
-        style = body.get("style") or body.get("fengge") or "二次元"
+            raise ContentViolation("prompt is required")
+
+        try:
+            n = int(body.get("n", 1))
+        except (TypeError, ValueError):
+            n = 1
+        n = max(1, min(4, n))
+
+        style = body.get("style") or body.get("fengge") or DEFAULT_STYLE
+        fengge = map_style(style)
+
+        aspect_ratio = body.get("aspect_ratio") or body.get("ratio")
+        if aspect_ratio:
+            chicun = map_ratio(aspect_ratio)
+        else:
+            chicun = map_size(body.get("size"))
+
+        response_format = (body.get("response_format") or "url").strip().lower()
+
         self.app.stats.inc("requests")
         t0 = time.perf_counter()
+        data = []
+        last_task = None
         try:
-            url, taskid = self.app.pool.generate(prompt, map_size(size), style)
+            for _ in range(n):
+                url, taskid = self.app.pool.generate(prompt, chicun, fengge)
+                last_task = taskid
+                item = {"url": url, "b64_json": None}
+                if response_format == "b64_json":
+                    item = {"url": None, "b64_json": _fetch_b64(url)}
+                data.append(item)
         except (ContentViolation, NoAccount):
             self.app.stats.inc("errors")
             raise
@@ -259,18 +307,33 @@ class Handler(BaseHTTPRequestHandler):
             self.app.stats.inc("errors")
             raise
         self.app.stats.inc("success")
-        return self._json(200, {
+        return {
             "created": int(time.time()),
-            "data": [{"url": url, "b64_json": None}],
-            "task_id": taskid,
+            "data": data,
+            "task_id": last_task,
             "elapsed_s": round(time.perf_counter() - t0, 1),
             "upstream": "qwen_image3 (dashscope)",
-        }, {"Access-Control-Allow-Origin": "*"})
+            "model": body.get("model") or "qwen-image3",
+            "size": chicun,
+            "aspect_ratio": aspect_ratio or None,
+            "n": n,
+        }
 
-    # ---- 管理 API ----
+    def _generate(self):
+        try:
+            result = self._do_generate(self._body())
+        except ContentViolation as e:
+            return self._json(400, {"error": {"message": str(e), "type": "invalid_request_error"}}, {"Access-Control-Allow-Origin": "*"})
+        except NoAccount as e:
+            return self._json(429, {"error": {"message": str(e), "type": "rate_limit_error"}}, {"Access-Control-Allow-Origin": "*"})
+        except UpstreamError as e:
+            return self._json(502, {"error": {"message": str(e), "type": "upstream_error"}}, {"Access-Control-Allow-Origin": "*"})
+        return self._json(200, result, {"Access-Control-Allow-Origin": "*"})
+
+    # ---- admin API ----
     def _admin_api(self, method, path, query):
         sub = path[len("/admin/api"):] or "/"
-        # 无需登录
+        # No login required
         if sub == "/login" and method == "POST":
             return self._login()
         if sub == "/me" and method == "GET":
@@ -278,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
         if sub == "/logout" and method == "POST":
             self.app.sessions.destroy(self._cookies().get(SessionStore.COOKIE))
             return self._json(200, {"ok": True}, {"Set-Cookie": f"{SessionStore.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"})
-        # 需要登录
+        # Login required
         if not self._is_admin():
             return self._json(401, {"error": "unauthorized"})
         if sub == "/config" and method == "GET":
@@ -286,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
         if sub == "/config" and method == "PUT":
             applied, errors = self.app.config.apply_settings(self._body())
             return self._json(200, {"ok": not errors, "applied": applied, "errors": errors})
+        if sub == "/generate" and method == "POST":
+            return self._json(200, self._do_generate(self._body()))
         if sub == "/password" and method == "POST":
             return self._change_password()
         if sub == "/keys" and method == "GET":
@@ -310,8 +375,8 @@ class Handler(BaseHTTPRequestHandler):
         password = body.get("password", "")
         stored = self.app.config.get("admin_password_hash")
         if not verify_password(password, stored):
-            time.sleep(0.6)  # 抑制暴力破解
-            return self._json(401, {"error": "密码错误"})
+            time.sleep(0.6)  # slow down brute-force attempts
+            return self._json(401, {"error": "Incorrect password"})
         token = self.app.sessions.create()
         cookie = f"{SessionStore.COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={self.app.config.get('session_ttl', default=86400)}"
         return self._json(200, {"ok": True, "must_change_password": self.app.config.get("must_change_password", default=False)}, {"Set-Cookie": cookie})
@@ -321,9 +386,9 @@ class Handler(BaseHTTPRequestHandler):
         current = body.get("current", "")
         new = body.get("new", "")
         if not verify_password(current, self.app.config.get("admin_password_hash")):
-            return self._json(400, {"error": "当前密码错误"})
+            return self._json(400, {"error": "Current password is incorrect"})
         if len(new) < 6:
-            return self._json(400, {"error": "新密码至少 6 位"})
+            return self._json(400, {"error": "New password must be at least 6 characters"})
         self.app.config.set("admin_password_hash", value=hash_password(new))
         self.app.config.set("must_change_password", value=False)
         self.app.config.save()
@@ -377,7 +442,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         threading.Thread(target=worker, daemon=True).start()
-        return self._json(200, {"ok": True, "message": "正在补充账号"})
+        return self._json(200, {"ok": True, "message": "Refilling accounts"})
 
 
 class Server(ThreadingHTTPServer):
@@ -401,15 +466,15 @@ def run():
             pass
 
     httpd = Server((host, port), Handler)
-    print(f"AI梦境画画师 2API 网关 v{__version__}")
-    print(f"  监听:      http://{host}:{port}")
-    print(f"  控制台:    http://{host}:{port}/admin   (默认密码 admin123)")
-    print(f"  文档:      http://{host}:{port}/docs")
-    print(f"  数据目录:  {app.data_dir}")
+    print(f"mengjing-2api gateway v{__version__}")
+    print(f"  listening:  http://{host}:{port}")
+    print(f"  console:    http://{host}:{port}/admin   (default password admin123)")
+    print(f"  docs:       http://{host}:{port}/docs")
+    print(f"  data dir:   {app.data_dir}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n正在关闭…")
+        print("\nshutting down…")
     finally:
         app.pool.stop()
         httpd.server_close()

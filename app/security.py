@@ -1,4 +1,4 @@
-"""密码哈希、API Key 校验、管理员会话。全部基于标准库。"""
+"""Password hashing, API-key verification, admin sessions. Standard library only."""
 import hashlib
 import hmac
 import secrets
@@ -30,7 +30,7 @@ def generate_api_key() -> str:
 
 
 def api_key_matches(presented: str, keys) -> bool:
-    """常量时间比较，避免时序侧信道。"""
+    """Constant-time comparison to avoid timing side channels."""
     if not presented:
         return False
     ok = False
@@ -43,7 +43,7 @@ def api_key_matches(presented: str, keys) -> bool:
 
 
 class SessionStore:
-    """内存态管理员会话，带过期与自动清理。"""
+    """In-memory admin sessions with expiry and automatic cleanup."""
 
     COOKIE = "mj_admin"
 

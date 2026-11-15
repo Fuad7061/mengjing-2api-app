@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>控制台 · AI梦境画画师 2API</title>
+<title>Console · mengjing-2api</title>
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -11,108 +11,145 @@
   <header class="top">
     <div class="brand">
       <div class="logo">🎨</div>
-      <div>AI梦境画画师 2API<div class="sub">管理控制台 · <span id="ver">-</span></div></div>
+      <div>mengjing-2api<div class="sub">Admin Console · <span id="ver">-</span></div></div>
     </div>
     <div class="row">
-      <a href="/docs" class="badge">API 文档</a>
-      <button class="ghost small" id="logout">退出登录</button>
+      <a href="/docs" class="badge">API Docs</a>
+      <button class="ghost small" id="logout">Sign out</button>
     </div>
   </header>
 
   <div class="tabs">
-    <button data-tab="overview" class="active">概览</button>
-    <button data-tab="keys">API 密钥</button>
-    <button data-tab="settings">设置</button>
-    <button data-tab="password">密码</button>
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="playground">Playground</button>
+    <button data-tab="keys">API Keys</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="password">Password</button>
   </div>
 
-  <!-- 概览 -->
+  <!-- Overview -->
   <section id="tab-overview">
     <div class="grid cols" id="stats"></div>
     <div class="card mt">
       <div class="row between">
-        <h2>账号池 <span class="hint">自动注册 / 保鲜</span></h2>
+        <h2>Account Pool <span class="hint">auto-register / keep-alive</span></h2>
         <div class="row">
           <span class="badge" id="pool-badge">-</span>
-          <button class="ghost small" id="refill">补充账号</button>
+          <button class="ghost small" id="refill">Refill</button>
         </div>
       </div>
       <div class="mt" style="overflow-x:auto">
         <table>
-          <thead><tr><th>ID</th><th>昵称</th><th>剩余额度</th><th>已用</th><th>状态</th></tr></thead>
-          <tbody id="pool-body"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+          <thead><tr><th>ID</th><th>Nickname</th><th>Credits left</th><th>Used</th><th>State</th></tr></thead>
+          <tbody id="pool-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
   </section>
 
-  <!-- API 密钥 -->
+  <!-- Playground -->
+  <section id="tab-playground" class="hidden">
+    <div class="card">
+      <div class="row between">
+        <h2>Playground <span class="hint">text to image</span></h2>
+        <span class="badge" id="pg-elapsed">-</span>
+      </div>
+      <label>Prompt</label>
+      <textarea id="pg-prompt" rows="3" placeholder="A white cat sitting on a windowsill, sunlight streaming in"></textarea>
+      <div class="grid cols">
+        <div><label>Style</label><select id="pg-style"><option value="">Loading…</option></select></div>
+        <div><label>Aspect ratio</label>
+          <select id="pg-ratio">
+            <option value="1:1">1:1 · square</option>
+            <option value="9:16">9:16 · portrait</option>
+            <option value="16:9">16:9 · landscape</option>
+          </select>
+        </div>
+        <div><label>Count (n)</label>
+          <select id="pg-n">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </div>
+      </div>
+      <div class="row mt">
+        <button id="pg-run">Generate</button>
+        <span class="muted" style="font-size:12px">Each image takes ~50–60s and uses one credit.</span>
+      </div>
+      <div id="pg-status" class="muted mt" style="font-size:13px"></div>
+      <div class="grid cols mt" id="pg-results"></div>
+    </div>
+  </section>
+
+  <!-- API keys -->
   <section id="tab-keys" class="hidden">
     <div class="card">
       <div class="row between">
-        <h2>API 密钥 <span class="hint">用于 /v1 接口鉴权</span></h2>
+        <h2>API Keys <span class="hint">for /v1 authentication</span></h2>
         <div class="row">
           <label style="margin:0;display:flex;gap:8px;align-items:center">
-            <input type="checkbox" id="require-key" style="width:auto"> 强制鉴权
+            <input type="checkbox" id="require-key" style="width:auto"> Require auth
           </label>
-          <button class="small" id="new-key">生成密钥</button>
+          <button class="small" id="new-key">Create key</button>
         </div>
       </div>
       <div class="mt" style="overflow-x:auto">
         <table>
-          <thead><tr><th>名称</th><th>密钥</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody id="keys-body"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+          <thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="keys-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
         </table>
       </div>
-      <p class="muted mt" style="font-size:12px">提示：密钥仅在创建时完整显示，请及时复制保存。</p>
+      <p class="muted mt" style="font-size:12px">Note: a key is shown in full only when created — copy and save it right away.</p>
     </div>
   </section>
 
-  <!-- 设置 -->
+  <!-- Settings -->
   <section id="tab-settings" class="hidden">
     <div class="card">
-      <h2>账号池设置</h2>
+      <h2>Account Pool</h2>
       <div class="grid cols">
-        <div><label>目标账号数</label><input type="number" id="pool.target"></div>
-        <div><label>最低账号数</label><input type="number" id="pool.min"></div>
-        <div><label>最大账号数</label><input type="number" id="pool.max"></div>
-        <div><label>每账号免费额度</label><input type="number" id="pool.free_per_account"></div>
-        <div><label>注册最小间隔（秒）</label><input type="number" step="0.5" id="pool.reg_min_interval"></div>
-        <div><label>补池间隔（秒）</label><input type="number" step="0.5" id="pool.refill_interval"></div>
-        <div><label>会话保鲜 TTL（秒）</label><input type="number" id="pool.session_ttl"></div>
-        <div><label>取号超时（秒）</label><input type="number" id="pool.acquire_timeout"></div>
+        <div><label>Target accounts</label><input type="number" id="pool.target"></div>
+        <div><label>Minimum accounts</label><input type="number" id="pool.min"></div>
+        <div><label>Maximum accounts</label><input type="number" id="pool.max"></div>
+        <div><label>Free credits per account</label><input type="number" id="pool.free_per_account"></div>
+        <div><label>Min register interval (s)</label><input type="number" step="0.5" id="pool.reg_min_interval"></div>
+        <div><label>Refill interval (s)</label><input type="number" step="0.5" id="pool.refill_interval"></div>
+        <div><label>Session keep-alive TTL (s)</label><input type="number" id="pool.session_ttl"></div>
+        <div><label>Acquire timeout (s)</label><input type="number" id="pool.acquire_timeout"></div>
       </div>
     </div>
     <div class="card">
-      <h2>上游设置</h2>
+      <h2>Upstream</h2>
       <div class="grid cols">
-        <div><label>上游域名</label><input type="text" id="upstream.host"></div>
+        <div><label>Upstream host</label><input type="text" id="upstream.host"></div>
         <div><label>User-Agent</label><input type="text" id="upstream.user_agent"></div>
-        <div><label>请求超时（秒）</label><input type="number" id="upstream.timeout"></div>
-        <div><label>轮询间隔（秒）</label><input type="number" step="0.1" id="upstream.poll_interval"></div>
-        <div><label>最大轮询次数</label><input type="number" id="upstream.poll_max"></div>
-        <div><label>最大重试次数</label><input type="number" id="upstream.max_retries"></div>
+        <div><label>Request timeout (s)</label><input type="number" id="upstream.timeout"></div>
+        <div><label>Poll interval (s)</label><input type="number" step="0.1" id="upstream.poll_interval"></div>
+        <div><label>Max poll attempts</label><input type="number" id="upstream.poll_max"></div>
+        <div><label>Max retries</label><input type="number" id="upstream.max_retries"></div>
       </div>
     </div>
     <div class="card">
-      <h2>其他</h2>
+      <h2>Other</h2>
       <div class="grid cols">
-        <div><label>样式缓存 TTL（秒）</label><input type="number" id="styles_cache_ttl"></div>
-        <div><label style="margin-top:26px"><input type="checkbox" id="docs_public" style="width:auto"> 文档公开访问</label></div>
+        <div><label>Styles cache TTL (s)</label><input type="number" id="styles_cache_ttl"></div>
+        <div><label style="margin-top:26px"><input type="checkbox" id="docs_public" style="width:auto"> Public docs access</label></div>
       </div>
-      <div class="row mt"><button id="save-settings">保存设置</button></div>
+      <div class="row mt"><button id="save-settings">Save settings</button></div>
     </div>
   </section>
 
-  <!-- 密码 -->
+  <!-- Password -->
   <section id="tab-password" class="hidden">
     <div class="card narrow" style="margin:0 auto">
-      <h2>修改管理员密码</h2>
-      <label>当前密码</label><input type="password" id="pw-current">
-      <label>新密码（至少 6 位）</label><input type="password" id="pw-new">
-      <label>确认新密码</label><input type="password" id="pw-new2">
-      <button class="mt" id="save-pw" style="width:100%">更新密码</button>
-      <p class="muted mt" style="font-size:12px">修改后所有登录会话将失效，需要重新登录。</p>
+      <h2>Change admin password</h2>
+      <label>Current password</label><input type="password" id="pw-current">
+      <label>New password (min 6 characters)</label><input type="password" id="pw-new">
+      <label>Confirm new password</label><input type="password" id="pw-new2">
+      <button class="mt" id="save-pw" style="width:100%">Update password</button>
+      <p class="muted mt" style="font-size:12px">All active sessions will be invalidated and you will need to sign in again.</p>
     </div>
   </section>
 </div>

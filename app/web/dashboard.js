@@ -1,40 +1,41 @@
-/* 控制台逻辑 */
+/* Console logic */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 let CONFIG = null;
 
-/* ---- 标签切换 ---- */
+/* ---- tab switching ---- */
 $$('.tabs button').forEach(b => b.onclick = () => {
   $$('.tabs button').forEach(x => x.classList.toggle('active', x === b));
-  ['overview', 'keys', 'settings', 'password'].forEach(t =>
+  ['overview', 'playground', 'keys', 'settings', 'password'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'keys') loadKeys();
+  if (b.dataset.tab === 'playground') loadStyles();
 });
 
-/* ---- 概览 ---- */
+/* ---- overview ---- */
 function renderStats(s, pool) {
   const items = [
-    ['累计请求', s.requests],
-    ['成功', s.success],
-    ['失败', s.errors],
-    ['注册账号', s.registrations],
-    ['运行时长', Math.round(s.uptime_s) + 's'],
-    ['池内可用', pool.pool_alive + ' / ' + pool.pool_size],
+    ['Requests', s.requests],
+    ['Success', s.success],
+    ['Errors', s.errors],
+    ['Registrations', s.registrations],
+    ['Uptime', Math.round(s.uptime_s) + 's'],
+    ['Pool alive', pool.pool_alive + ' / ' + pool.pool_size],
   ];
   $('#stats').innerHTML = items.map(([l, v]) =>
     `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
 }
 
 function renderPool(pool) {
-  $('#pool-badge').textContent = `可用 ${pool.pool_alive} · 空闲 ${pool.pool_idle} · 额度 ${pool.pool_total_credits}`;
+  $('#pool-badge').textContent = `alive ${pool.pool_alive} · idle ${pool.pool_idle} · credits ${pool.pool_total_credits}`;
   const rows = (pool.accounts || []).map(a => `<tr>
     <td class="mono">${esc(a.id)}</td>
     <td>${esc(a.nickname)}</td>
     <td>${a.credits}</td>
     <td>${a.used}</td>
-    <td>${a.busy ? '<span class="badge">使用中</span>' : '<span class="badge ok">空闲</span>'}</td>
+    <td>${a.busy ? '<span class="badge">busy</span>' : '<span class="badge ok">idle</span>'}</td>
   </tr>`).join('');
-  $('#pool-body').innerHTML = rows || '<tr><td colspan="5" class="muted">暂无账号，正在自动注册…</td></tr>';
+  $('#pool-body').innerHTML = rows || '<tr><td colspan="5" class="muted">No accounts yet, auto-registering…</td></tr>';
 }
 
 async function loadOverview() {
@@ -43,35 +44,83 @@ async function loadOverview() {
   $('#ver').textContent = 'v' + j.version;
   renderStats(j.stats, j.pool);
   renderPool(j.pool);
-  if (CONFIG.must_change_password) toast('建议立即修改默认密码', 'err');
+  if (CONFIG.must_change_password) toast('Please change the default password now', 'err');
 }
 
 $('#refill').onclick = async () => {
-  try { await api('/admin/api/pool/refill', { method: 'POST' }); toast('正在补充账号…', 'ok'); }
+  try { await api('/admin/api/pool/refill', { method: 'POST' }); toast('Refilling accounts…', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 };
 
-/* ---- 密钥 ---- */
+/* ---- playground ---- */
+let _stylesLoaded = false;
+async function loadStyles() {
+  if (_stylesLoaded) return;
+  try {
+    const j = await api('/v1/styles');
+    const list = (j && j.data) || [];
+    $('#pg-style').innerHTML = list.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    _stylesLoaded = list.length > 0;
+  } catch (e) {
+    $('#pg-style').innerHTML = '<option value="">(unavailable)</option>';
+  }
+}
+
+$('#pg-run').onclick = async () => {
+  const prompt = $('#pg-prompt').value.trim();
+  if (!prompt) return toast('Enter a prompt first', 'err');
+  const body = {
+    prompt,
+    style: $('#pg-style').value || undefined,
+    aspect_ratio: $('#pg-ratio').value,
+    n: parseInt($('#pg-n').value, 10) || 1,
+  };
+  const btn = $('#pg-run');
+  btn.disabled = true;
+  $('#pg-results').innerHTML = '';
+  $('#pg-elapsed').textContent = '-';
+  const started = Date.now();
+  const tick = setInterval(() => {
+    $('#pg-status').textContent = `Generating… ${Math.round((Date.now() - started) / 1000)}s`;
+  }, 500);
+  $('#pg-status').textContent = 'Generating… 0s';
+  try {
+    const j = await api('/admin/api/generate', { method: 'POST', body });
+    const imgs = (j.data || []).map(d => d.url || (d.b64_json ? 'data:image/png;base64,' + d.b64_json : ''));
+    $('#pg-results').innerHTML = imgs.map(u =>
+      `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" style="width:100%;border-radius:10px;border:1px solid var(--border)"></a>`).join('');
+    $('#pg-elapsed').textContent = j.elapsed_s + 's';
+    $('#pg-status').textContent = `Done · task ${esc(j.task_id || '')} · ${imgs.length} image(s)`;
+  } catch (e) {
+    $('#pg-status').textContent = '';
+    toast(e.message, 'err');
+  } finally {
+    clearInterval(tick);
+    btn.disabled = false;
+  }
+};
+
+/* ---- keys ---- */
 async function loadKeys() {
   const j = await api('/admin/api/keys');
   $('#require-key').checked = !!j.require_api_key;
   const rows = (j.keys || []).map(k => `<tr>
     <td>${esc(k.name)}</td>
     <td class="mono">${esc(k.key || '')}</td>
-    <td>${k.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge err">停用</span>'}</td>
+    <td>${k.enabled ? '<span class="badge ok">enabled</span>' : '<span class="badge err">disabled</span>'}</td>
     <td class="row">
-      <button class="ghost small" data-copy="${esc(k.key || '')}">复制</button>
-      <button class="ghost small" data-toggle="${esc(k.key || '')}" data-on="${k.enabled ? 0 : 1}">${k.enabled ? '停用' : '启用'}</button>
-      <button class="danger small" data-del="${esc(k.key || '')}">删除</button>
+      <button class="ghost small" data-copy="${esc(k.key || '')}">Copy</button>
+      <button class="ghost small" data-toggle="${esc(k.key || '')}" data-on="${k.enabled ? 0 : 1}">${k.enabled ? 'Disable' : 'Enable'}</button>
+      <button class="danger small" data-del="${esc(k.key || '')}">Delete</button>
     </td>
   </tr>`).join('');
-  $('#keys-body').innerHTML = rows || '<tr><td colspan="4" class="muted">暂无密钥</td></tr>';
+  $('#keys-body').innerHTML = rows || '<tr><td colspan="4" class="muted">No keys yet</td></tr>';
   $$('[data-toggle]').forEach(b => b.onclick = async () => {
     await api('/admin/api/keys/update', { method: 'POST', body: { key: b.dataset.toggle, enabled: b.dataset.on === '1' } });
     loadKeys();
   });
   $$('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('确定删除该密钥？')) return;
+    if (!confirm('Delete this key?')) return;
     await api('/admin/api/keys/delete', { method: 'POST', body: { key: b.dataset.del } });
     loadKeys();
   });
@@ -80,20 +129,20 @@ async function loadKeys() {
 
 $('#require-key').onchange = async () => {
   await api('/admin/api/config', { method: 'PUT', body: { require_api_key: $('#require-key').checked } });
-  toast('已更新', 'ok');
+  toast('Updated', 'ok');
 };
 
 $('#new-key').onclick = async () => {
-  const name = prompt('密钥名称：', 'default');
+  const name = prompt('Key name:', 'default');
   if (name === null) return;
   const j = await api('/admin/api/keys', { method: 'POST', body: { name } });
   await loadKeys();
   if (j.key && j.key.key) {
-    if (confirm('密钥已生成，是否复制到剪贴板？\n\n' + j.key.key)) copyText(j.key.key);
+    if (confirm('Key created. Copy it to the clipboard?\n\n' + j.key.key)) copyText(j.key.key);
   }
 };
 
-/* ---- 设置 ---- */
+/* ---- settings ---- */
 const FIELDS = ['pool.target','pool.min','pool.max','pool.free_per_account','pool.reg_min_interval',
   'pool.refill_interval','pool.session_ttl','pool.acquire_timeout','upstream.host','upstream.user_agent',
   'upstream.timeout','upstream.poll_interval','upstream.poll_max','upstream.max_retries','styles_cache_ttl'];
@@ -121,28 +170,28 @@ $('#save-settings').onclick = async () => {
   body.docs_public = $('#docs_public').checked;
   try {
     const j = await api('/admin/api/config', { method: 'PUT', body });
-    toast(j.errors && j.errors.length ? ('部分失败: ' + j.errors.join('; ')) : '设置已保存', j.errors && j.errors.length ? 'err' : 'ok');
+    toast(j.errors && j.errors.length ? ('Partial failure: ' + j.errors.join('; ')) : 'Settings saved', j.errors && j.errors.length ? 'err' : 'ok');
     loadOverview();
   } catch (e) { toast(e.message, 'err'); }
 };
 
-/* ---- 密码 ---- */
+/* ---- password ---- */
 $('#save-pw').onclick = async () => {
   const cur = $('#pw-current').value, nw = $('#pw-new').value, nw2 = $('#pw-new2').value;
-  if (nw !== nw2) return toast('两次输入的新密码不一致', 'err');
+  if (nw !== nw2) return toast('The new passwords do not match', 'err');
   try {
     await api('/admin/api/password', { method: 'POST', body: { current: cur, new: nw } });
-    toast('密码已更新，请重新登录', 'ok');
+    toast('Password updated, please sign in again', 'ok');
     setTimeout(() => location.href = '/login', 1200);
   } catch (e) { toast(e.message, 'err'); }
 };
 
-/* ---- 退出 ---- */
+/* ---- sign out ---- */
 $('#logout').onclick = async () => {
   await api('/admin/api/logout', { method: 'POST' });
   location.href = '/login';
 };
 
-/* ---- 初始化 ---- */
+/* ---- init ---- */
 loadOverview().then(fillSettings).catch(e => toast(e.message, 'err'));
 setInterval(() => { loadOverview().catch(() => {}); }, 5000);

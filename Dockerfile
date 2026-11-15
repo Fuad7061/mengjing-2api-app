@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 仅拷贝运行所需文件，镜像极小（纯标准库，无第三方依赖）
+# Copy only what is needed at runtime — tiny image (pure stdlib, no third-party deps)
 COPY main.py ./
 COPY app ./app
 

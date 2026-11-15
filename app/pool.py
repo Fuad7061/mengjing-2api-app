@@ -1,4 +1,5 @@
-"""账号池：自动注册、会话保鲜、并发调度（条件变量驱动，低 CPU）。"""
+"""Account pool: auto-registration, session keep-alive, concurrency scheduling
+(condition-variable driven, low CPU)."""
 import json
 import os
 import threading
@@ -22,9 +23,12 @@ class AccountPool:
         self._cond = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._last_reg = 0.0
+        self._save_interval = 10.0
+        self._last_save = 0.0
+        self._dirty = False
         self._load()
 
-    # ---- 持久化 ----
+    # ---- persistence ----
     def _load(self):
         if os.path.exists(self.path):
             try:
@@ -36,18 +40,25 @@ class AccountPool:
             except Exception:
                 pass
 
-    def save(self):
+    def save(self, force=False):
+        """Persist the pool. Throttled unless `force` is set to reduce disk churn."""
+        now = time.time()
+        if not force and now - self._last_save < self._save_interval:
+            self._dirty = True
+            return
         with self._lock:
             data = [{k: v for k, v in a.items() if k != "inflight"} for a in self.accounts]
         tmp = self.path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
             os.replace(tmp, self.path)
+            self._last_save = now
+            self._dirty = False
         except Exception:
             pass
 
-    # ---- 生命周期 ----
+    # ---- lifecycle ----
     def start(self):
         threading.Thread(target=self._refill_loop, name="pool-refill", daemon=True).start()
 
@@ -55,12 +66,15 @@ class AccountPool:
         self._stop.set()
         with self._cond:
             self._cond.notify_all()
+        self.save(force=True)
 
     def _refill_loop(self):
         cfg = self.config
         while not self._stop.is_set():
             try:
                 self._maintain()
+                if self._dirty:
+                    self.save()
             except Exception:
                 pass
             self._stop.wait(cfg.get("pool", "refill_interval", default=5.0))
@@ -75,7 +89,7 @@ class AccountPool:
         reg_interval = cfg.get("pool", "reg_min_interval", default=3.0)
         now = time.time()
 
-        # 1) 清理无额度账号
+        # 1) Drop exhausted accounts
         with self._cond:
             for a in list(self.accounts):
                 if a.get("credits", 0) <= 0 and a.get("inflight", 0) == 0:
@@ -85,14 +99,14 @@ class AccountPool:
             stale = [a for a in alive if a.get("inflight", 0) == 0 and now - a.get("ts", 0) > ttl]
             want = len(alive) < target and len(self.accounts) < maximum
 
-        # 2) 会话保鲜（放在锁外，避免阻塞取号）
+        # 2) Session keep-alive (outside the lock to avoid blocking acquires)
         for a in stale:
             if self.upstream.relogin(a):
                 a["ts"] = now
             else:
                 a["credits"] = 0
 
-        # 3) 补充账号（带最小间隔，避免被风控）
+        # 3) Refill accounts (rate-limited to avoid triggering anti-abuse)
         if want and now - self._last_reg >= reg_interval:
             self._last_reg = now
             try:
@@ -106,10 +120,10 @@ class AccountPool:
             except Exception:
                 pass
         elif len(alive) < minimum:
-            # 低于下限时提速
+            # Speed up when below the minimum
             self._last_reg = min(self._last_reg, now - reg_interval * 0.5)
 
-    # ---- 调度 ----
+    # ---- scheduling ----
     def acquire(self, wait=True, timeout=None):
         if timeout is None:
             timeout = self.config.get("pool", "acquire_timeout", default=120)
@@ -121,25 +135,25 @@ class AccountPool:
                         a["inflight"] = a.get("inflight", 0) + 1
                         return a
                 if not wait:
-                    raise NoAccount("当前没有可用账号")
+                    raise NoAccount("no account available")
                 remaining = deadline - time.time()
                 if remaining <= 0:
-                    raise NoAccount("等待可用账号超时")
-                self._cond.wait(min(remaining, 1.0))
+                    raise NoAccount("timed out waiting for an available account")
+                self._cond.wait(min(remaining, 2.0))
 
     def release(self, acct):
         with self._cond:
             acct["inflight"] = max(0, acct.get("inflight", 0) - 1)
             self._cond.notify_all()
 
-    # ---- 生成 ----
+    # ---- generation ----
     def generate(self, prompt, chicun, style):
         cfg = self.config
         poll_interval = cfg.get("upstream", "poll_interval", default=1.2)
         poll_max = cfg.get("upstream", "poll_max", default=60)
         free = cfg.get("pool", "free_per_account", default=5)
         retries = max(1, cfg.get("upstream", "max_retries", default=3))
-        last_err = "未知错误"
+        last_err = "unknown error"
 
         for attempt in range(retries):
             acct = self.acquire(wait=True)
@@ -156,7 +170,7 @@ class AccountPool:
                     state, url = self.upstream.poll(taskid, acct)
                     if state == "done":
                         return url, taskid
-                last_err = "生成超时"
+                last_err = "generation timed out"
             except ContentViolation:
                 raise
             except NoAccount:
@@ -169,9 +183,9 @@ class AccountPool:
             finally:
                 self.release(acct)
 
-        raise UpstreamError(f"生成失败：{last_err}")
+        raise UpstreamError(f"generation failed: {last_err}")
 
-    # ---- 统计 ----
+    # ---- stats ----
     def snapshot(self, probe=False):
         with self._lock:
             accounts = [dict(a) for a in self.accounts]
