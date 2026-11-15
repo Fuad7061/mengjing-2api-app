@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · AI梦境画画师 2API</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div class="wrap narrow" style="padding-top: 12vh">
+  <div class="card">
+    <div class="brand" style="margin-bottom: 18px">
+      <div class="logo">🎨</div>
+      <div>AI梦境画画师 2API<div class="sub">管理控制台</div></div>
+    </div>
+    <label for="pw">管理员密码</label>
+    <input type="password" id="pw" placeholder="请输入密码" autofocus>
+    <div id="msg" class="muted mt" style="font-size: 13px"></div>
+    <button class="mt" style="width: 100%" id="btn">登录</button>
+    <div class="muted mt center" style="font-size: 12px">默认密码 <code>admin123</code>，登录后请尽快修改</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/assets/app.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+async function login() {
+  const pw = $('#pw').value;
+  if (!pw) return;
+  $('#btn').disabled = true;
+  try {
+    const r = await fetch('/admin/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    const j = await r.json();
+    if (r.ok) { location.href = '/'; return; }
+    $('#msg').textContent = j.error || '登录失败';
+    toast(j.error || '登录失败', 'err');
+  } catch (e) { toast('网络错误', 'err'); }
+  finally { $('#btn').disabled = false; }
+}
+$('#btn').onclick = login;
+$('#pw').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+</script>
+</body>
+</html>

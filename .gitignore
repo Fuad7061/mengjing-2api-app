@@ -1,0 +1,14 @@
+apk-unzip/
+jadx-out/
+*.apk
+*.log
+server.log
+frida*.log
+ui*.xml
+token.bin
+bdtoken*.json
+bdtoken*.raw
+device_pool.json
+data/
+__pycache__/
+.git/
