@@ -35,6 +35,10 @@ DEFAULTS = {
         "host": "0.0.0.0",
         "port": 8788,
     },
+    "logs": {
+        "retention_days": 10,   # 0 = keep forever
+        "max_entries": 5000,
+    },
     "styles_cache_ttl": 300,
     "session_ttl": 86400,
 }
@@ -58,6 +62,8 @@ EDITABLE = {
     "upstream.poll_interval": float,
     "upstream.poll_max": int,
     "upstream.max_retries": int,
+    "logs.retention_days": int,
+    "logs.max_entries": int,
 }
 
 

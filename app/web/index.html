@@ -24,6 +24,7 @@
     <button data-tab="playground">Playground</button>
     <button data-tab="keys">API Keys</button>
     <button data-tab="settings">Settings</button>
+    <button data-tab="logs">Logs</button>
     <button data-tab="password">Password</button>
   </div>
 
@@ -138,6 +139,39 @@
         <div><label style="margin-top:26px"><input type="checkbox" id="docs_public" style="width:auto"> Public docs access</label></div>
       </div>
       <div class="row mt"><button id="save-settings">Save settings</button></div>
+    </div>
+  </section>
+
+  <!-- Logs -->
+  <section id="tab-logs" class="hidden">
+    <div class="card">
+      <div class="row between">
+        <h2>Logs <span class="hint" id="logs-meta">loading…</span></h2>
+        <div class="row">
+          <select id="logs-level" style="width:auto;padding:7px 10px;font-size:12px">
+            <option value="">All levels</option>
+            <option value="ERROR">Error</option>
+            <option value="WARN">Warn</option>
+            <option value="INFO">Info</option>
+            <option value="DEBUG">Debug</option>
+          </select>
+          <label style="margin:0;display:flex;gap:6px;align-items:center;font-size:12px">
+            <input type="checkbox" id="logs-auto" checked style="width:auto"> Auto-refresh
+          </label>
+          <button class="ghost small" id="logs-refresh">Refresh</button>
+          <button class="danger small" id="logs-clear">Delete all logs</button>
+        </div>
+      </div>
+      <div class="logview mt" id="logs-view"><div class="log-empty muted">Loading…</div></div>
+      <p class="muted mt" style="font-size:12px">WARN and ERROR entries are also written to the container stdout/stderr stream (visible in Coolify). Identical messages within 60s are collapsed into a single line with a repeat counter.</p>
+    </div>
+    <div class="card">
+      <h2>Log retention <span class="hint">auto delete</span></h2>
+      <div class="grid cols">
+        <div><label>Auto-delete logs after (days, 0 = keep forever)</label><input type="number" id="logs.retention_days" min="0"></div>
+        <div><label>Max stored entries</label><input type="number" id="logs.max_entries" min="100" step="100"></div>
+      </div>
+      <div class="row mt"><button id="save-logs-settings">Save retention settings</button></div>
     </div>
   </section>
 

@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+import traceback
 
 from .upstream import ContentViolation, UpstreamError, Upstream
 
@@ -13,10 +14,11 @@ class NoAccount(RuntimeError):
 
 
 class AccountPool:
-    def __init__(self, config, stats, path):
+    def __init__(self, config, stats, path, logs=None):
         self.config = config
         self.stats = stats
         self.path = path
+        self.logs = logs
         self.upstream = Upstream(config)
         self.accounts = []
         self._lock = threading.RLock()
@@ -28,6 +30,11 @@ class AccountPool:
         self._dirty = False
         self._load()
 
+    # ---- logging ----
+    def _log(self, level, msg, detail=None):
+        if self.logs is not None:
+            getattr(self.logs, level)("pool", msg, detail=detail)
+
     # ---- persistence ----
     def _load(self):
         if os.path.exists(self.path):
@@ -37,8 +44,9 @@ class AccountPool:
                     self.accounts = disk
                     for a in self.accounts:
                         a.setdefault("inflight", 0)
-            except Exception:
-                pass
+            except Exception as e:
+                self._log("warn", f"failed to load pool state: {e!r}",
+                          detail=traceback.format_exc())
 
     def save(self, force=False):
         """Persist the pool. Throttled unless `force` is set to reduce disk churn."""
@@ -55,8 +63,9 @@ class AccountPool:
             os.replace(tmp, self.path)
             self._last_save = now
             self._dirty = False
-        except Exception:
-            pass
+        except Exception as e:
+            self._log("error", f"failed to persist pool state: {e!r}",
+                      detail=traceback.format_exc())
 
     # ---- lifecycle ----
     def start(self):
@@ -75,8 +84,9 @@ class AccountPool:
                 self._maintain()
                 if self._dirty:
                     self.save()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log("error", f"pool maintenance cycle failed: {e!r}",
+                          detail=traceback.format_exc())
             self._stop.wait(cfg.get("pool", "refill_interval", default=5.0))
 
     def _maintain(self):
@@ -94,6 +104,7 @@ class AccountPool:
             for a in list(self.accounts):
                 if a.get("credits", 0) <= 0 and a.get("inflight", 0) == 0:
                     self.accounts.remove(a)
+                    self._log("info", f"dropping exhausted account {a.get('id')}")
             self._cond.notify_all()
             alive = [a for a in self.accounts if a.get("credits", 0) > 0]
             stale = [a for a in alive if a.get("inflight", 0) == 0 and now - a.get("ts", 0) > ttl]
@@ -104,6 +115,7 @@ class AccountPool:
             if self.upstream.relogin(a):
                 a["ts"] = now
             else:
+                self._log("warn", f"session keep-alive (relogin) failed for account {a.get('id')}")
                 a["credits"] = 0
 
         # 3) Refill accounts (rate-limited to avoid triggering anti-abuse)
@@ -117,8 +129,9 @@ class AccountPool:
                     self._cond.notify_all()
                 self.stats.inc("registrations")
                 self.save()
-            except Exception:
-                pass
+            except Exception as e:
+                self._log("error", f"account registration failed: {e!r}",
+                          detail=traceback.format_exc())
         elif len(alive) < minimum:
             # Speed up when below the minimum
             self._last_reg = min(self._last_reg, now - reg_interval * 0.5)
@@ -171,6 +184,7 @@ class AccountPool:
                     if state == "done":
                         return url, taskid
                 last_err = "generation timed out"
+                self._log("warn", f"generation attempt {attempt + 1}/{retries} timed out (task {taskid})")
             except ContentViolation:
                 raise
             except NoAccount:
@@ -178,11 +192,15 @@ class AccountPool:
             except UpstreamError as e:
                 last_err = str(e)
                 acct["credits"] = max(0, acct.get("credits", 0) - 1)
+                self._log("warn", f"generation attempt {attempt + 1}/{retries} failed: {e}")
             except Exception as e:  # noqa: BLE001
                 last_err = str(e)
+                self._log("warn", f"generation attempt {attempt + 1}/{retries} failed: {e!r}",
+                          detail=traceback.format_exc())
             finally:
                 self.release(acct)
 
+        self._log("error", f"generation gave up after {retries} attempts: {last_err}")
         raise UpstreamError(f"generation failed: {last_err}")
 
     # ---- stats ----

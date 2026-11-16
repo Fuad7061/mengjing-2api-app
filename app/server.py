@@ -10,6 +10,7 @@ import ssl
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +18,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from . import __version__
 from .config import Config
+from .logstore import LogStore
 from .pool import AccountPool, NoAccount
 from .security import (
     SessionStore,
@@ -84,7 +86,8 @@ class App:
         self.config.ensure_admin_password()
         self.sessions = SessionStore(ttl=self.config.get("session_ttl", default=86400))
         self.stats = Stats()
-        self.pool = AccountPool(self.config, self.stats, os.path.join(data_dir, "pool.json"))
+        self.logs = LogStore(os.path.join(data_dir, "logs.jsonl"), self.config)
+        self.pool = AccountPool(self.config, self.stats, os.path.join(data_dir, "pool.json"), logs=self.logs)
         self.static = self._load_static()
 
     def _load_static(self):
@@ -105,7 +108,11 @@ class Handler(BaseHTTPRequestHandler):
         pass  # silent to avoid log spam from frequent polling
 
     def log_error(self, fmt, *args):
-        sys.stderr.write("[http] %s - %s\n" % (self.address_string(), fmt % args))
+        msg = "%s - %s" % (self.address_string(), fmt % args)
+        if self.app and self.app.logs:
+            self.app.logs.warn("http", msg)
+        else:
+            sys.stderr.write("[http] %s\n" % msg)
 
     def _send(self, code, body, ctype="application/json; charset=utf-8", headers=None, raw=False):
         if not raw and isinstance(body, (dict, list)):
@@ -211,13 +218,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._v1(method, path, query)
             return self._pages(method, path)
         except NoAccount as e:
+            self.app.logs.warn("api", f"{method} {path}: {e}")
             return self._json(429, {"error": {"message": str(e), "type": "rate_limit_error"}})
         except ContentViolation as e:
+            self.app.logs.warn("api", f"{method} {path}: {e}")
             return self._json(400, {"error": {"message": str(e), "type": "invalid_request_error"}})
         except UpstreamError as e:
+            self.app.logs.error("api", f"{method} {path}: {e}")
             return self._json(502, {"error": {"message": str(e), "type": "upstream_error"}})
         except Exception as e:  # noqa: BLE001
-            self.log_error("dispatch error: %r", e)
+            self.app.logs.error("api", f"{method} {path} dispatch error: {e!r}",
+                                detail=traceback.format_exc())
             return self._json(500, {"error": {"message": "internal error", "type": "server_error"}})
 
     # ---- pages ----
@@ -258,6 +269,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/styles" and method == "GET":
             return self._json(200, {"object": "list", "data": STYLES}, cors)
         if not self._api_ok():
+            self.app.logs.warn("auth", f"rejected request with invalid API key from {self.client_address[0]}: {method} {path}")
             return self._json(401, {"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}, cors)
         if path == "/v1/pool" and method == "GET":
             return self._json(200, self.app.pool.snapshot(), cors)
@@ -292,6 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.perf_counter()
         data = []
         last_task = None
+        self.app.logs.info("generate", f"requested n={n} size={chicun} style={fengge} model={body.get('model') or 'qwen-image3'}")
         try:
             for _ in range(n):
                 url, taskid = self.app.pool.generate(prompt, chicun, fengge)
@@ -307,6 +320,7 @@ class Handler(BaseHTTPRequestHandler):
             self.app.stats.inc("errors")
             raise
         self.app.stats.inc("success")
+        self.app.logs.info("generate", f"ok n={n} task={last_task} elapsed={round(time.perf_counter() - t0, 1)}s")
         return {
             "created": int(time.time()),
             "data": data,
@@ -323,11 +337,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = self._do_generate(self._body())
         except ContentViolation as e:
+            self.app.logs.warn("generate", f"rejected: {e}")
             return self._json(400, {"error": {"message": str(e), "type": "invalid_request_error"}}, {"Access-Control-Allow-Origin": "*"})
         except NoAccount as e:
+            self.app.logs.warn("generate", f"no account: {e}")
             return self._json(429, {"error": {"message": str(e), "type": "rate_limit_error"}}, {"Access-Control-Allow-Origin": "*"})
         except UpstreamError as e:
+            self.app.logs.error("generate", f"upstream failed: {e}")
             return self._json(502, {"error": {"message": str(e), "type": "upstream_error"}}, {"Access-Control-Allow-Origin": "*"})
+        except Exception as e:  # noqa: BLE001
+            self.app.logs.error("generate", f"unexpected error: {e!r}", detail=traceback.format_exc())
+            return self._json(500, {"error": {"message": "internal error", "type": "server_error"}}, {"Access-Control-Allow-Origin": "*"})
         return self._json(200, result, {"Access-Control-Allow-Origin": "*"})
 
     # ---- admin API ----
@@ -348,6 +368,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"config": self.app.config.snapshot(), "stats": self.app.stats.snapshot(), "pool": self.app.pool.snapshot(), "version": __version__})
         if sub == "/config" and method == "PUT":
             applied, errors = self.app.config.apply_settings(self._body())
+            if applied:
+                self.app.logs.info("admin", f"settings updated: {', '.join(applied)}")
+            if errors:
+                self.app.logs.warn("admin", f"settings rejected: {'; '.join(errors)}")
             return self._json(200, {"ok": not errors, "applied": applied, "errors": errors})
         if sub == "/generate" and method == "POST":
             return self._json(200, self._do_generate(self._body()))
@@ -368,6 +392,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._force_refill()
         if sub == "/stats" and method == "GET":
             return self._json(200, {"stats": self.app.stats.snapshot(), "pool": self.app.pool.snapshot()})
+        if sub == "/logs" and method == "GET":
+            return self._json(200, self.app.logs.query(
+                level=(query.get("level") or [""])[0] or None,
+                source=(query.get("source") or [""])[0] or None,
+                limit=(query.get("limit") or ["200"])[0],
+                offset=(query.get("offset") or ["0"])[0],
+            ))
+        if sub == "/logs/clear" and method == "POST":
+            removed = self.app.logs.clear()
+            self.app.logs.info("admin", f"logs cleared ({removed} entries removed)")
+            return self._json(200, {"ok": True, "removed": removed})
         return self._json(404, {"error": "not found"})
 
     def _login(self):
@@ -376,8 +411,10 @@ class Handler(BaseHTTPRequestHandler):
         stored = self.app.config.get("admin_password_hash")
         if not verify_password(password, stored):
             time.sleep(0.6)  # slow down brute-force attempts
+            self.app.logs.warn("auth", f"failed admin login attempt from {self.client_address[0]}")
             return self._json(401, {"error": "Incorrect password"})
         token = self.app.sessions.create()
+        self.app.logs.info("auth", f"admin login from {self.client_address[0]}")
         cookie = f"{SessionStore.COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={self.app.config.get('session_ttl', default=86400)}"
         return self._json(200, {"ok": True, "must_change_password": self.app.config.get("must_change_password", default=False)}, {"Set-Cookie": cookie})
 
@@ -393,6 +430,7 @@ class Handler(BaseHTTPRequestHandler):
         self.app.config.set("must_change_password", value=False)
         self.app.config.save()
         self.app.sessions.destroy_all()
+        self.app.logs.info("admin", f"admin password changed by {self.client_address[0]}")
         return self._json(200, {"ok": True})
 
     def _create_key(self):
@@ -403,6 +441,7 @@ class Handler(BaseHTTPRequestHandler):
         keys.append(key)
         self.app.config.set("api_keys", value=keys)
         self.app.config.save()
+        self.app.logs.info("admin", f"API key created: {name}")
         return self._json(200, {"ok": True, "key": key})
 
     def _update_key(self):
@@ -415,9 +454,11 @@ class Handler(BaseHTTPRequestHandler):
             if k.get("key") == target:
                 k["enabled"] = enabled
                 found = True
+                key_name = k.get("name", target)
         if found:
             self.app.config.set("api_keys", value=keys)
             self.app.config.save()
+            self.app.logs.info("admin", f"API key {'enabled' if enabled else 'disabled'}: {key_name}")
         return self._json(200 if found else 404, {"ok": found})
 
     def _delete_key(self):
@@ -425,8 +466,11 @@ class Handler(BaseHTTPRequestHandler):
         target = body.get("key", "")
         keys = self.app.config.get("api_keys", default=[])
         remaining = [k for k in keys if k.get("key") != target]
-        self.app.config.set("api_keys", value=remaining)
-        self.app.config.save()
+        if len(remaining) != len(keys):
+            removed_name = next((k.get("name") for k in keys if k.get("key") == target), target)
+            self.app.config.set("api_keys", value=remaining)
+            self.app.config.save()
+            self.app.logs.info("admin", f"API key deleted: {removed_name}")
         return self._json(200, {"ok": len(remaining) != len(keys)})
 
     def _force_refill(self):
@@ -439,9 +483,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.app.pool._cond.notify_all()
                 self.app.stats.inc("registrations")
                 self.app.pool.save()
-            except Exception:
-                pass
+                self.app.logs.info("pool", f"manual refill: registered account {acct.get('id')}")
+            except Exception as e:
+                self.app.logs.error("pool", f"manual refill failed: {e!r}", detail=traceback.format_exc())
         threading.Thread(target=worker, daemon=True).start()
+        self.app.logs.info("admin", f"manual pool refill requested by {self.client_address[0]}")
         return self._json(200, {"ok": True, "message": "Refilling accounts"})
 
 
@@ -471,12 +517,15 @@ def run():
     print(f"  console:    http://{host}:{port}/admin   (default password admin123)")
     print(f"  docs:       http://{host}:{port}/docs")
     print(f"  data dir:   {app.data_dir}")
+    app.logs.info("server", f"mengjing-2api v{__version__} started, listening on {host}:{port}, data dir {app.data_dir}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nshutting down…")
     finally:
+        app.logs.info("server", "shutting down")
         app.pool.stop()
+        app.logs.stop()
         httpd.server_close()
 
 

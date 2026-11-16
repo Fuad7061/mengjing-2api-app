@@ -6,10 +6,11 @@ let CONFIG = null;
 /* ---- tab switching ---- */
 $$('.tabs button').forEach(b => b.onclick = () => {
   $$('.tabs button').forEach(x => x.classList.toggle('active', x === b));
-  ['overview', 'playground', 'keys', 'settings', 'password'].forEach(t =>
+  ['overview', 'playground', 'keys', 'settings', 'logs', 'password'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'keys') loadKeys();
   if (b.dataset.tab === 'playground') loadStyles();
+  if (b.dataset.tab === 'logs') loadLogs();
 });
 
 /* ---- overview ---- */
@@ -175,6 +176,88 @@ $('#save-settings').onclick = async () => {
   } catch (e) { toast(e.message, 'err'); }
 };
 
+/* ---- logs ---- */
+function fmtTs(ts) {
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function renderLogs(j) {
+  const s = j.stats || {};
+  const lv = s.levels || {};
+  $('#logs-meta').textContent =
+    `${j.total} shown / ${s.total || 0} stored · ${fmtBytes(s.file_bytes || 0)} · retention ${s.retention_days === 0 ? 'off' : (s.retention_days + 'd')}` +
+    (lv.ERROR ? ` · ${lv.ERROR} error` : '') + (lv.WARN ? ` · ${lv.WARN} warn` : '');
+  const badgeCls = { ERROR: 'err', WARN: 'warn', INFO: 'info', DEBUG: 'dbg' };
+  const rows = (j.entries || []).map(e => `<div class="log-row lv-${esc((e.level || 'INFO').toLowerCase())}">
+    <span class="log-ts">${esc(fmtTs(e.ts))}</span>
+    <span class="badge ${badgeCls[e.level] || 'info'}">${esc(e.level)}</span>
+    <span class="log-src">${esc(e.source)}</span>
+    <span class="log-msg">${esc(e.msg)}${e.count > 1 ? ` <span class="badge log-count">×${e.count}</span>` : ''}${
+      e.detail ? `<details class="log-detail"><summary>details</summary><pre>${esc(e.detail)}</pre></details>` : ''}</span>
+  </div>`).join('');
+  $('#logs-view').innerHTML = rows || '<div class="log-empty muted">No log entries yet</div>';
+}
+
+async function loadLogs() {
+  try {
+    const level = $('#logs-level').value;
+    const params = new URLSearchParams({ limit: '500' });
+    if (level) params.set('level', level);
+    const j = await api('/admin/api/logs?' + params.toString());
+    renderLogs(j);
+  } catch (e) {
+    $('#logs-view').innerHTML = `<div class="log-empty muted">Failed to load logs: ${esc(e.message)}</div>`;
+  }
+}
+
+$('#logs-refresh').onclick = loadLogs;
+$('#logs-level').onchange = loadLogs;
+
+$('#logs-clear').onclick = async () => {
+  if (!confirm('Delete ALL log entries? This cannot be undone.')) return;
+  try {
+    const j = await api('/admin/api/logs/clear', { method: 'POST' });
+    toast(`Deleted ${j.removed} log entries`, 'ok');
+    loadLogs();
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+$('#save-logs-settings').onclick = async () => {
+  try {
+    const j = await api('/admin/api/config', {
+      method: 'PUT',
+      body: { logs: {
+        retention_days: parseInt(document.getElementById('logs.retention_days').value, 10) || 0,
+        max_entries: parseInt(document.getElementById('logs.max_entries').value, 10) || 5000,
+      } },
+    });
+    toast(j.errors && j.errors.length ? ('Save failed: ' + j.errors.join('; ')) : 'Retention settings saved',
+      j.errors && j.errors.length ? 'err' : 'ok');
+    loadLogs();
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+function fillLogsSettings() {
+  if (!CONFIG || !CONFIG.logs) return;
+  const ret = document.getElementById('logs.retention_days');
+  const max = document.getElementById('logs.max_entries');
+  if (ret && document.activeElement !== ret && CONFIG.logs.retention_days !== undefined) ret.value = CONFIG.logs.retention_days;
+  if (max && document.activeElement !== max && CONFIG.logs.max_entries !== undefined) max.value = CONFIG.logs.max_entries;
+}
+
+setInterval(() => {
+  const tab = $('#tab-logs');
+  if (tab && !tab.classList.contains('hidden') && $('#logs-auto').checked) loadLogs();
+}, 5000);
+
 /* ---- password ---- */
 $('#save-pw').onclick = async () => {
   const cur = $('#pw-current').value, nw = $('#pw-new').value, nw2 = $('#pw-new2').value;
@@ -193,5 +276,5 @@ $('#logout').onclick = async () => {
 };
 
 /* ---- init ---- */
-loadOverview().then(fillSettings).catch(e => toast(e.message, 'err'));
-setInterval(() => { loadOverview().catch(() => {}); }, 5000);
+loadOverview().then(() => { fillSettings(); fillLogsSettings(); }).catch(e => toast(e.message, 'err'));
+setInterval(() => { loadOverview().then(fillLogsSettings).catch(() => {}); }, 5000);
